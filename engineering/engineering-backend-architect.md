@@ -185,6 +185,96 @@ app.get('/api/users/:id',
 );
 ```
 
+### Job Search Tracker Architecture Patterns
+
+```markdown
+## Application State Machine
+Jobs flow through a defined lifecycle — never skip states, always have timestamps:
+
+saved → applied → screening → phone_screen → interview → offer → accepted
+                                                               ↘ rejected
+                                                          ↘ rejected (any stage)
+                                             ↘ withdrawn (any stage)
+
+## Core Domain Schema (see Database Optimizer for full SQL)
+- users          — auth, preferences, resume versions
+- jobs           — scraped/entered listings with embedding vector
+- applications   — the join between user + job, tracks state + timeline
+- contacts       — people at target companies (for networking track)
+- notes          — freeform notes on any entity (job, application, contact)
+- events         — interview scheduling, follow-up reminders, deadlines
+- documents      — resume versions, cover letters linked to applications
+```
+
+```javascript
+// Application state machine with validation
+const APPLICATION_STATES = [
+  'saved', 'applied', 'screening', 'phone_screen',
+  'interview', 'offer', 'accepted', 'rejected', 'withdrawn'
+];
+
+const VALID_TRANSITIONS = {
+  saved:        ['applied', 'withdrawn'],
+  applied:      ['screening', 'phone_screen', 'rejected', 'withdrawn'],
+  screening:    ['phone_screen', 'rejected', 'withdrawn'],
+  phone_screen: ['interview', 'rejected', 'withdrawn'],
+  interview:    ['interview', 'offer', 'rejected', 'withdrawn'], // multiple rounds
+  offer:        ['accepted', 'rejected', 'withdrawn'],
+};
+
+function transitionApplication(current, next) {
+  const allowed = VALID_TRANSITIONS[current] ?? [];
+  if (!allowed.includes(next)) {
+    throw new Error(`Invalid transition: ${current} → ${next}`);
+  }
+  return { status: next, [`${next}_at`]: new Date().toISOString() };
+}
+```
+
+```javascript
+// Job data ingestion — webhook receiver pattern
+// Supports LinkedIn Easy Apply callbacks, Indeed API, and manual entry
+app.post('/api/webhooks/job-import', authenticate, async (req, res) => {
+  const { source, jobs } = req.body; // source: 'linkedin' | 'indeed' | 'manual'
+
+  const processed = await Promise.all(jobs.map(async (job) => {
+    // 1. Deduplicate by (company_id, external_job_id)
+    const existing = await db.jobs.findByExternalId(source, job.external_id);
+    if (existing) return { skipped: true, id: existing.id };
+
+    // 2. Generate embedding for semantic matching
+    const embedding = await aiService.embed(
+      `${job.title} ${job.description} ${job.requirements}`
+    );
+
+    // 3. Upsert with vector
+    return db.jobs.create({ ...job, source, embedding, status: 'active' });
+  }));
+
+  res.json({ imported: processed.filter(j => !j.skipped).length });
+});
+```
+
+```javascript
+// Follow-up reminder pipeline — event-driven, not polling
+// When an application transitions to 'applied', schedule follow-up reminders
+async function scheduleFollowUps(applicationId, appliedAt) {
+  const reminders = [
+    { daysAfter: 5,  type: 'follow_up_email',   message: 'Send a follow-up email' },
+    { daysAfter: 10, type: 'linkedin_connect',   message: 'Connect with recruiter on LinkedIn' },
+    { daysAfter: 14, type: 'final_follow_up',    message: 'Final follow-up or mark as inactive' },
+  ];
+
+  await db.events.createMany(reminders.map(r => ({
+    application_id: applicationId,
+    type: r.type,
+    scheduled_at: addDays(appliedAt, r.daysAfter),
+    message: r.message,
+    status: 'pending',
+  })));
+}
+```
+
 ## 💭 Your Communication Style
 
 - **Be strategic**: "Designed microservices architecture that scales to 10x current load"

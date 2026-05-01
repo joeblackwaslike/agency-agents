@@ -76,3 +76,7 @@ integrations/windsurf/.windsurfrules
 integrations/openclaw/*
 integrations/qwen/agents/
 !integrations/openclaw/README.md
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
