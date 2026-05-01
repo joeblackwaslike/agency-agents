@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/install.sh --tool antigravity)",
+      "Bash(./scripts/install.sh --tool opencode)",
+      "Skill(update-config)",
+      "Skill(update-config:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/joeblack/.claude"
+    ]
+  }
+}
